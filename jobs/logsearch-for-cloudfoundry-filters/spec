@@ -1,8 +1,0 @@
----
-name: logsearch-for-cloudfoundry-filters
-templates: {}
-
-packages:
-- logsearch-for-cloudfoundry-filters
-
-properties: {}
