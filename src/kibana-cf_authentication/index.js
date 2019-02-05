@@ -82,6 +82,7 @@ module.exports = function (kibana) {
       var sessionExpirationMs = (process.env.SESSION_EXPIRATION_MS) ? process.env.SESSION_EXPIRATION_MS : 12 * 60 * 60 * 1000; // 12 hours by default
       var random_string = process.env.SESSION_KEY || randomstring.generate(40);
       var skip_authorization = process.env.SKIP_AUTHORIZATION;
+      var mustFilterTerms = process.env.MUST_FILTER_TERMS_JSON || '[]';
 
       if (skip_ssl_validation) {
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -113,7 +114,8 @@ module.exports = function (kibana) {
           redis_port: Joi.string().default(redis_port),
           session_expiration_ms: Joi.number().integer().default(sessionExpirationMs),
           use_https: Joi.boolean().default(useHttps),
-          skip_authorization: Joi.boolean().default(skip_authorization)
+          skip_authorization: Joi.boolean().default(skip_authorization),
+          must_filter_terms: Joi.string().default(mustFilterTerms)
         }).default();
 
       }).catch(function (error) {
@@ -204,7 +206,7 @@ module.exports = function (kibana) {
           protocol: 'oauth2',
           auth: config.get('authentication.authorization_uri'),
           token: config.get('authentication.token_uri'),
-          scope: ['openid', 'oauth.approvals', 'scim.userids', 'cloud_controller.read'],
+          scope: ['openid', 'cloud_controller.read'],
           /* Function for obtaining user profile (is called after obtaining user access token in bell/lib/oauth.js v2 function).
            Here we get user account details (profile, orgs/spaces) and store it and user credentials (Oauth tokens) in the cache.
            We use generated session_id as a key when storing user data in the cache.
@@ -339,21 +341,18 @@ module.exports = function (kibana) {
                 if (err) {
                   server.log(['error', 'authentication', 'session:get:_filtered_msearch'], JSON.stringify(err));
                 }
-                if (cached.account.orgs.indexOf(config.get('authentication.cf_system_org')) === -1 && !(config.get('authentication.skip_authorization'))) {
-                  var modified_payload = [];
-                  var lines = request.payload.toString().split('\n');
-                  var num_lines = lines.length;
-                  for (var i = 0; i < num_lines - 1; i+=2) {
-                    var indexes = lines[i];
-                    var query = JSON.parse(lines[i+1]);
-                    query = filterQuery(query, cached);
-                    modified_payload.push(indexes);
-                    modified_payload.push(JSON.stringify(query));
-                  }
-                  options.payload = new Buffer(modified_payload.join('\n') + '\n');
-                } else {
-                  options.payload = request.payload;
+                var modified_payload = [];
+                var lines = request.payload.toString().split('\n');
+                var num_lines = lines.length;
+                for (var i = 0; i < num_lines - 1; i+=2) {
+                  var indexes = lines[i];
+                  var query = JSON.parse(lines[i+1]);
+                  query = filterQuery(query, cached, config);
+                  modified_payload.push(indexes);
+                  modified_payload.push(JSON.stringify(query));
                 }
+                options.payload = new Buffer(modified_payload.join('\n') + '\n');
+
                 options.headers = request.headers;
                 delete options.headers.host;
                 delete options.headers['user-agent'];
@@ -385,13 +384,11 @@ module.exports = function (kibana) {
                 if (err) {
                   server.log(['error', 'authentication', 'session:get:_filtered_search'], JSON.stringify(err));
                 }
-                if (cached.account.orgs.indexOf(config.get('authentication.cf_system_org')) === -1 && !(config.get('authentication.skip_authorization')))  {
-                  var payload = JSON.parse(request.payload.toString() || '{}');
-                  payload = filterQuery(payload, cached);
-                  options.payload = new Buffer(JSON.stringify(payload));
-                } else {
-                  options.payload = request.payload;
-                }
+
+                var payload = JSON.parse(request.payload.toString() || '{}');
+                payload = filterQuery(payload, cached, config);
+                options.payload = new Buffer(JSON.stringify(payload));
+
                 options.headers = request.headers;
                 delete options.headers.host;
                 delete options.headers['user-agent'];
@@ -430,17 +427,27 @@ module.exports = function (kibana) {
   });
 };
 
-function filterQuery(payload, cached) {
+function filterQuery(payload, cached, config) {
+  var allowAllSpaces = (cached.account.orgs.indexOf(config.get('authentication.cf_system_org')) != -1) || config.get('authentication.skip_authorization');
+
   var bool = ensureKeys(payload, ['query', 'bool']);
   bool.must = bool.must || [];
   // Note: the `must` clause may be an array or an object
   if (isObject(bool.must)) {
     bool.must = [bool.must];
   }
-  bool.must.push(
-    {'terms': {'@cf.space_id': cached.account.spaceIds}},
-    {'terms': {'@cf.org_id': cached.account.orgIds}}
-  );
+
+  var mf = JSON.parse(config.get('authentication.must_filter_terms'));
+  for (var i = 0; i < mf.length; i++) {
+    bool.must.push(mf[i]);
+  }
+
+  if (!allowAllSpaces) {
+    bool.must.push(
+      {'terms': {'@cf.space_id': cached.account.spaceIds}},
+      {'terms': {'@cf.org_id': cached.account.orgIds}}
+    );
+  }
   return payload;
 }
 
