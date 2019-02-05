@@ -1,0 +1,47 @@
+jobs:
+- name: kibana-for-cf-build-container-image
+  serial: true
+  plan:
+  - do:
+    - get: src
+      trigger: true
+    - put: img
+      params:
+        build: src
+        tag_file: src/.git/ref
+      get_params: {skip_download: true}
+    on_success:
+      put: slack
+      params:
+        text: |
+          :white_check_mark: $BUILD_JOB_NAME SUCCESS
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        text: |
+          :x: $BUILD_JOB_NAME FAILED
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+resources:
+- name: src
+  type: git
+  source:
+    uri: https://github.com/govau/cga-kibana-for-cf
+    branch: master
+    ignore_paths:
+    - ci/**
+- name: img
+  type: docker-image
+  source:
+    repository: ((aws_repository))
+    aws_access_key_id: ((aws_access_key_id))
+    aws_secret_access_key: ((aws_secret_access_key))
+- name: slack
+  type: slack-notification
+  source:
+    url: ((slack-webhook-url))
+resource_types:
+- name: slack-notification
+  type: docker-image
+  source:
+    repository: cfcommunity/slack-notification-resource
