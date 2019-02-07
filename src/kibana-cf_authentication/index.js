@@ -410,6 +410,7 @@ module.exports = function (kibana) {
 
       // Redirect _msearch and _search through our own route so we can modify the payload
       server.ext('onRequest', function (request, reply) {
+        console.log('intercept:', request.path);
         if (/elasticsearch\/_msearch/.test(request.path) && !request.auth.artifacts) {
           request.setUrl('/_filtered_msearch');
         } else {
